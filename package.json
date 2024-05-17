@@ -11,6 +11,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@pinecone-database/pinecone": "^2.2.1",
     "express": "^4.19.2",
     "openai": "^4.40.2",
     "socket.io": "^4.7.5"

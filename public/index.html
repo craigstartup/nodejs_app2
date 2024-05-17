@@ -1,183 +1,110 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Content Curator Work</title>
-<script src="/socket.io/socket.io.js"></script>
-<script>
-document.addEventListener('DOMContentLoaded', async function() {
-  const socket = io();
-
-  // Fetch button data from the server
-  const response = await fetch('/buttonData.json');
-  const buttonData = await response.json();
-
-  const templateButtons = document.getElementById('templateButtons');
-  templateButtons.innerHTML = ''; // Clear any existing content
-
-  // Generate buttons dynamically
-  buttonData.forEach(data => {
-    const button = document.createElement('button');
-    button.className = 'template-btn';
-    button.textContent = data.label;
-    button.setAttribute('data-text', data.text);
-    button.addEventListener('click', function() {
-      document.getElementById('promptText').value = this.getAttribute('data-text');
-    });
-    templateButtons.appendChild(button);
-  });
-  
-  // Call listDataFiles when the page is loaded to populate file checkboxes
-  await listDataFiles();
-
-  function listDataFiles() {
-    console.log("Listing available files...");
-    const filesContainer = document.getElementById('filesContainer');
-    fetch('/list-data-files').then(response => response.json()).then(files => {
-        console.log("Files received:", files);
-        filesContainer.innerHTML = '';
-        files.forEach(file => {
-            if (file.endsWith('.txt') || file.endsWith('.csv')) {  // Include CSV files as well
-                const label = document.createElement('label');
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.value = file;
-                label.appendChild(checkbox);
-                label.appendChild(document.createTextNode(file));
-                filesContainer.appendChild(label);
-                filesContainer.appendChild(document.createElement('br'));
-            }
-        });
-    }).catch(error => {
-        console.error("Error fetching files:", error);
-        filesContainer.innerHTML = '<p>Error loading files. Please try again later.</p>';
-    });
-  }
-
-  // Event listener for form submission
-  document.getElementById('promptForm').addEventListener('submit', function(event) {
-    event.preventDefault();
-    const prompt = document.getElementById('promptText').value;
-    const files = Array.from(document.querySelectorAll('#filesContainer input[type="checkbox"]:checked')).map(el => el.value);
-    const filesList = files.join(', '); // Join file names into a string
-  
-    console.log("Sending data to server:", { prompt, files });
-    socket.emit('sendPrompt', { prompt, files });
-    document.getElementById('response').innerHTML = '';
-    document.getElementById('loadingImage').style.display = 'block';
-  
-    // Store the files list for later use in download
-    document.getElementById('downloadBtn').dataset.filesList = filesList; // Use data attribute to store file names
-  });
-
-  // Handle the incoming response chunks from the server
-  socket.on('responseChunk', function(data) {
-    if (data.content) {
-      const formattedContent = data.content.replace(/\n/g, "<br>");
-      document.getElementById('response').innerHTML += formattedContent;
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vector DB Query</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
-    if (!data.finish_reason) {
-      document.getElementById('loadingImage').style.display = 'none';
+    #promptForm, #templateButtons {
+      width: 100%;
+      max-width: 600px;
+      margin: 20px auto;
     }
-    if (data.finish_reason) {
-      document.getElementById('downloadBtn').style.display = 'inline';
+    #response {
+      max-width: 600px;
+      width: 100%;
+      margin: 20px auto;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
     }
-  });
-
-  socket.on('error', function(error) {
-    console.error('Error:', error);
-    document.getElementById('loadingImage').style.display = 'none';
-    document.getElementById('response').innerHTML = 'Error: ' + error;
-  });
-
-  // Function to enable downloading the response as a text file
-  document.getElementById('downloadBtn').addEventListener('click', function() {
-    var responseText = document.getElementById('response').innerText;
-    var promptText = document.getElementById('promptText').value;
-    var filesList = this.dataset.filesList; // Retrieve stored file names
-    var formattedFilesList = filesList.replace(/, /g, '\n'); // Replace commas with newlines for each file name
-    var combinedText = responseText + "\n\nOriginal Prompt:\n" + promptText + "\n\nIncluded Files:\n" + formattedFilesList;
-
-    var element = document.createElement('a');
-    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(combinedText));
-    element.setAttribute('download', 'output.txt');
-    element.style.display = 'none';
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-  });
-});
-</script>
-<style>
-  body {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    margin: 0;
-    font-family: Arial, sans-serif;
-  }
-  #filesContainer {
-    width: 100%;
-    max-width: 600px;
-    margin: 20px auto;
-    padding: 10px;
-    border: 1px solid #ccc; /* Makes the container visible */
-    background-color: #f8f8f8; /* Light background */
-  }
-  #promptForm, #templateButtons {
-    width: 100%; /* Adjusted width */
-    max-width: 600px; /* Match the width of the response container */
-    margin: 20px auto; /* Center align the form and button container */
-  }
-  #response {
-    max-width: 600px;
-    width: 100%;
-    margin: 20px auto;
-    white-space: pre-wrap; /* Keeps formatting and enables word wrap */
-    overflow-wrap: break-word;
-  }
-  .template-btn {
-    padding: 10px 20px;
-    margin: 5px;
-    font-size: 14px;
-    cursor: pointer;
-    border: none;
-    background-color: #f2f2f2;
-    border-radius: 5px;
-    transition: background-color 0.3s;
-  }
-  .template-btn:hover {
-    background-color: #ddd; /* Light grey on hover */
-  }
-  #promptText {
-    width: 100%; /* Ensure the textarea matches the width of its container */
-    box-sizing: border-box; /* Include padding and border in the width */
-    height: 100px; /* Adjust height as needed */
-  }
-  #templateButtons {
-    display: flex; /* Use Flexbox to align children */
-    flex-wrap: wrap; /* Allow buttons to wrap onto the next line */
-    justify-content: center; /* Center buttons horizontally */
-    align-items: center; /* Center buttons vertically */
-  }
-</style>
+    .template-btn {
+      padding: 10px 20px;
+      margin: 5px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      background-color: #f2f2f2;
+      border-radius: 5px;
+      transition: background-color 0.3s;
+    }
+    .template-btn:hover {
+      background-color: #ddd;
+    }
+    #promptText {
+      width: 100%;
+      box-sizing: border-box;
+      height: 100px;
+    }
+    #templateButtons {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+    }
+  </style>
 </head>
 <body>
-<h1>Content Curator Work</h1>
-<div id="templateButtons">
-  <!-- Buttons will be added dynamically here -->
-</div>
-<div id="filesContainer">
-  <h2>Available Files</h2>
-  <!-- File list will appear here dynamically -->
-</div>
-<form id="promptForm">
-  <textarea id="promptText" rows="4" cols="50"></textarea><br>
-  <button type="submit">Submit</button>
-</form>
-<img id="loadingImage" src="loading.gif" style="display: none;" alt="Loading..."/>
-<p id="response"></p>
-<button id="downloadBtn" style="display:none;">Download</button>
+  <h1>Vector DB Query</h1>
+  <div id="templateButtons"></div>
+  <div id="filesContainer">
+    <h2>Available Files</h2>
+  </div>
+  <form id="promptForm">
+    <textarea id="promptText" rows="4" cols="50"></textarea><br>
+    <label>
+      <input type="checkbox" id="developerOutput"> Developer Output
+    </label><br>
+    <label>
+      Namespace: <input type="text" id="namespace" placeholder="Enter namespace">
+    </label><br>
+    <label>
+      Top K: <input type="number" id="topK" placeholder="Enter top K" value="10">
+    </label><br>
+    <button type="submit">Submit</button>
+  </form>
+  <img id="loadingImage" src="loading.gif" style="display: none;" alt="Loading..."/>
+  <p id="response"></p>
+  <button id="downloadBtn" style="display:none;">Download</button>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const promptForm = document.getElementById('promptForm');
+    const promptText = document.getElementById('promptText');
+    const developerOutput = document.getElementById('developerOutput');
+    const namespaceInput = document.getElementById('namespace');
+    const topKInput = document.getElementById('topK');
+    const response = document.getElementById('response');
+    const loadingImage = document.getElementById('loadingImage');
+    const downloadBtn = document.getElementById('downloadBtn');
+
+    promptForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      response.textContent = '';
+      loadingImage.style.display = 'block';
+      socket.emit('sendPrompt', {
+        prompt: promptText.value,
+        developerOutput: developerOutput.checked,
+        namespace: namespaceInput.value,
+        topK: parseInt(topKInput.value, 10)
+      });
+    });
+
+    socket.on('responseChunk', (data) => {
+      if (data.content) {
+        response.textContent += data.content;
+      }
+      if (data.finish_reason) {
+        loadingImage.style.display = 'none';
+      }
+    });
+  </script>
 </body>
 </html>

@@ -2,68 +2,134 @@ const express = require('express');
 const { OpenAI } = require('openai');
 const { Server } = require('socket.io');
 const http = require('http');
-const fs = require('fs').promises; // Include fs.promises for reading files
+const { Pinecone } = require('@pinecone-database/pinecone');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-const port = process.env.PORT || 3000; // Use the environment port if available, otherwise use 3000
+const port = process.env.PORT || 3000;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-app.use(express.static('public'));
-
-app.get('/list-data-files', async (req, res) => {
-  try {
-    const files = await fs.readdir('data');
-    const filteredFiles = files.filter(file => file.endsWith('.txt') || file.endsWith('.csv')); // Filtering logic
-    res.json(filteredFiles);
-  } catch (error) {
-    res.status(500).send(error.toString());
-  }
-});
-
-// Socket connection
-io.on('connection', (socket) => {
-  socket.on('sendPrompt', async ({ prompt, files }) => {
-    console.log("Received from client:", { prompt, files });  // Log immediately on receipt
-
-    if (!files || !Array.isArray(files) || !prompt) {
-      console.error('Invalid or missing data received from client:', { prompt, files });
-      socket.emit('error', 'Invalid or missing prompt or files data');
-      return;  // Stop further execution if the data is not correct
-    }
-
-    try {
-      const fileContents = await Promise.all(
-        files.map(file => fs.readFile(`data/${file}`, 'utf8'))
-      );
-
-      const messages = fileContents.map(content => ({ role: 'user', content }));
-      messages.unshift({ role: 'system', content: 'You are an editorial assistant creating marketing materials from online course transcripts.' });
-      messages.push({ role: 'user', content: prompt });
-
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4-turbo",
-        messages: messages,
-        stream: true,
-      });
-
-      for await (const chunk of completion) {
-        socket.emit('responseChunk', { content: chunk.choices[0].delta.content, finish_reason: chunk.choices[0].finish_reason });
-        if (chunk.choices[0].finish_reason) {
-          break; // Properly break if the chat completion has finished
-        }
-      }
-    } catch (error) {
-      console.error('Error processing prompt:', error);
-      socket.emit('error', error.toString());
-    }
+(async () => {
+  // Initialize Pinecone
+  const pc = new Pinecone({
+    apiKey: process.env.PINECONE_API_KEY,
   });
-});
+  const pineconeIndex = pc.index('eoa');
 
-server.listen(port, () => {
-  console.log(`Server is listening on port ${port}`);
-});
+  app.use(express.static('public'));
+
+  async function generateEmbedding(text, model = 'text-embedding-ada-002') {
+    try {
+      const response = await openai.embeddings.create({
+        input: text,
+        model: model,
+      });
+      return response.data[0].embedding;
+    } catch (error) {
+      console.error('Error generating embedding:', error);
+      return null;
+    }
+  }
+
+  async function queryFromPinecone(vector, namespace, topK) {
+    try {
+      const queryResponse = await pineconeIndex.namespace(namespace).query({
+        vector: vector,
+        topK: topK,
+        includeMetadata: true
+      });
+      return queryResponse;
+    } catch (error) {
+      console.error('Error querying Pinecone:', error);
+      return null;
+    }
+  }
+
+  io.on('connection', (socket) => {
+    socket.on('sendPrompt', async ({ prompt, developerOutput, namespace, topK }) => {
+      console.log("Received from client:", { prompt, developerOutput, namespace, topK });
+
+      if (!prompt) {
+        console.error('Invalid or missing data received from client:', { prompt });
+        socket.emit('error', 'Invalid or missing prompt data');
+        return;
+      }
+
+      try {
+        // Generate embedding for the prompt
+        const embedding = await generateEmbedding(prompt);
+
+        // Query Pinecone for the closest matches
+        const results = await queryFromPinecone(embedding, namespace, topK);
+
+        if (!results || !results.matches) {
+          console.error('No results returned from Pinecone');
+          socket.emit('error', 'No results returned from Pinecone');
+          return;
+        }
+
+        // Print the data received from Pinecone for troubleshooting
+        console.log("Data received from Pinecone:", JSON.stringify(results, null, 2));
+
+        // Extract all metadata fields dynamically
+        const allMetadataFields = new Set();
+        results.matches.forEach(match => {
+          if (match.metadata) {
+            Object.keys(match.metadata).forEach(field => {
+              allMetadataFields.add(field);
+            });
+          }
+        });
+        const metadataFields = Array.from(allMetadataFields);
+        console.log("Metadata fields:", metadataFields);
+
+        // Construct context message
+        const contextMessage = `The following metadata fields are included: ${metadataFields.join(', ')}.`;
+
+        // Concatenate all transcripts and metadata into a single message
+        const combinedMessage = results.matches.map(match => {
+          const metadata = metadataFields.map(field => `${field}: ${match.metadata[field]}`).join("\n");
+          return `${metadata}\nTranscript:\n${match.metadata.Transcript}\n\n`;
+        }).join('');
+
+        // Construct messages with context
+        const messages = [
+          { role: 'system', content: contextMessage },
+          { role: 'user', content: combinedMessage },
+          { role: 'user', content: prompt },
+        ];
+
+        if (developerOutput) {
+          console.log("Messages sent to OpenAI:", JSON.stringify(messages, null, 2));
+        }
+
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4-turbo",
+          messages: messages,
+          stream: true,
+        });
+
+        for await (const chunk of completion) {
+          socket.emit('responseChunk', {
+            content: chunk.choices[0].delta.content,
+            finish_reason: chunk.choices[0].finish_reason,
+          });
+          if (chunk.choices[0].finish_reason) {
+            break;
+          }
+        }
+      } catch (error) {
+        console.error('Error processing prompt:', error);
+        socket.emit('error', error.toString());
+      }
+    });
+  });
+
+  server.listen(port, () => {
+    console.log(`Server is listening on port ${port}`);
+  });
+})();
